@@ -7,6 +7,10 @@
 #include <termios.h>
 #include <unistd.h>
 
+/*** defines ***/
+
+#define CTRL_KEY(k) ((k) & 0x1f)
+
 /*** data ***/
 
 struct termios orig_termios;
@@ -14,6 +18,10 @@ struct termios orig_termios;
 /*** terminal ***/
 
 void die(const char *s) {
+    // エラー出す時にターミナル上の表示を消してカーソルを左上に移動してから出力する
+    write(STDOUT_FILENO, "\x1b[2J", 4);
+    write(STDOUT_FILENO, "\x1b[H", 3);
+    
     perror(s);
     exit(1);
 }
@@ -38,21 +46,51 @@ void enableRawMode() {
     if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw) == -1) die("tcsetattr");
 }
 
+char editorReadKey() {
+    int nread;
+    char c;
+    while ((nread = read(STDIN_FILENO, &c, 1)) != 1) {
+        if (nread == -1 && errno != EAGAIN) die("read");
+    }
+    return c;
+}
+
+/*** output ***/
+
+void editorRefreshScreen() {
+    // The \x1b is the ASCII escape character (hexadecimal value 0x1b = ESC) 
+    // \xXX で1バイト
+    // コンソール全体をクリア : ED – Erase In Display
+    write(STDOUT_FILENO, "\x1b[2J", 4);
+    // カーソルを左上に移動 : CUP – Cursor Position
+    write(STDOUT_FILENO, "\x1b[H", 3);
+}
+
+
+/*** input ***/
+
+void editorProcessKeypress() {
+    char c = editorReadKey();
+
+    switch (c) {
+    case CTRL_KEY('q'):
+        exit(0);
+        break;
+    case CTRL_KEY('\\'):
+        errno = ERANGE;
+        die("dummy exit");
+        break;
+    }
+}
+
 /*** init ***/
 
 int main() {
     enableRawMode();
 
     while (1) {
-        char c = '\0';
-        if (read(STDIN_FILENO, &c, 1) == -1 && errno != EAGAIN) die("read");
-        if (iscntrl(c)) {
-            // 制御文字(control character)の場合
-            printf("%d\r\n", c);
-        } else {
-            printf("%d ('%c')\r\n", c, c);
-        }
-        if (c == 'q') break;
+        editorRefreshScreen();
+        editorProcessKeypress();
     }
     return 0;
 }
