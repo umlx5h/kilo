@@ -4,15 +4,35 @@
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <sys/ioctl.h>
 #include <termios.h>
 #include <unistd.h>
 
-#include <string.h>
+#include <signal.h>
 
 /*** defines ***/
 
+#define KILO_VERSION "0.0.1"
+
 #define CTRL_KEY(k) ((k) & 0x1f)
+
+/*** my ***/
+void handleSIGUSR1(int unused __attribute__((unused))) {
+    ;
+}
+
+void sigpause(const char *msg) {
+    if (msg != NULL)
+        printf("Wait SIGUSR1: %s\r\n", msg);
+    pause();
+}
+
+
+void debug() {
+    // sigpause()でSIGUSR1が受けるまで止めるようにする
+    signal(SIGUSR1, handleSIGUSR1);
+}
 
 /*** data ***/
 
@@ -113,26 +133,77 @@ int getWindowSize(int *rows, int *cols) {
     }
 }
 
+/*** append buffer ***/
+
+struct abuf {
+    char *b;
+    int len;
+};
+
+#define ABUF_INIT {NULL, 0}
+
+void abAppend(struct abuf *ab, const char *s, int len) {
+    char *new = realloc(ab->b, ab->len + len);
+
+    if (new == NULL) return;
+    memcpy(&new[ab->len], s, len);
+    ab->b = new;
+    ab->len += len;
+}
+
+
+void abFree(struct abuf *ab) {
+    free(ab->b);
+}
+
+// writeFd にwrite(2)してバッファを再初期化する
+void abFlush(struct abuf *ab, int writeFd) {
+    write(writeFd, ab->b, ab->len);
+    abFree(ab);
+    ab->b = NULL;
+    ab->len = 0;
+}
+
 /*** output ***/
 
-void editorDrawRows() {
+void editorDrawRows(struct abuf *ab) {
     int y;
     for (y = 0; y < E.screenrows; y++) {
-        write(STDOUT_FILENO, "~\r\n", 3);
+        abAppend(ab, "~", 1);
+
+        // カーソルの右側を削除 : EL – Erase In Line
+        abAppend(ab, "\x1b[K", 3);
+
+        if (y < E.screenrows - 1) {
+            abAppend(ab, "\r\n", 2);
+        }
     }
 }
 
 void editorRefreshScreen() {
+    struct abuf ab = ABUF_INIT;
+    // struct abuf ab = { .b = NULL, .len = 0 };
     // The \x1b is the ASCII escape character (hexadecimal value 0x1b = ESC) 
     // \xXX で1バイト
-    // コンソール全体をクリア : ED – Erase In Display
-    write(STDOUT_FILENO, "\x1b[2J", 4);
+    // カーソルを隠す : RM – Reset Mode
+    // ESC [ Ps ; Ps ; . . . ; Ps l 	default value: none
+    abAppend(&ab, "\x1b[?25l", 6);
+    // // コンソール全体をクリア : ED – Erase In Display
+    // abAppend(&ab, "\x1b[2J", 4);
     // カーソルを左上に移動 : CUP – Cursor Position
-    write(STDOUT_FILENO, "\x1b[H", 3);
+    abAppend(&ab, "\x1b[H", 3);
 
-    editorDrawRows();
+    editorDrawRows(&ab);
 
-    write(STDOUT_FILENO, "\x1b[H", 3);
+    // 再度カーソル左上移動
+    abAppend(&ab, "\x1b[H", 3);
+    // カーソルを表示 : SM – Set Mode
+    // ESC [ Ps ; . . . ; Ps h 	default value: none
+    // abAppend(&ab, "\x1b[?25h", 6);
+
+    write(STDOUT_FILENO, ab.b, ab.len);
+
+    abFree(&ab);
 }
 
 
@@ -159,6 +230,7 @@ void initEditor() {
 }
 
 int main() {
+    debug();
     enableRawMode();
     initEditor();
 
