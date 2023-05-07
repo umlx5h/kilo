@@ -10,6 +10,7 @@
 #include <unistd.h>
 
 #include <signal.h>
+#include <assert.h>
 
 /*** defines ***/
 
@@ -37,6 +38,7 @@ void debug() {
 /*** data ***/
 
 struct editorConfig {
+    int cx, cy;
     int screenrows;
     int screencols;
     struct termios orig_termios;
@@ -81,7 +83,30 @@ char editorReadKey() {
     while ((nread = read(STDIN_FILENO, &c, 1)) != 1) {
         if (nread == -1 && errno != EAGAIN) die("read");
     }
-    return c;
+
+    if (c == '\x1b') {
+        // エスケープシーケンス(ESC)から始まる場合はさらに複数バイト読み取る
+        char seq[3];
+
+        // ESCの後に少なくとも2バイトあるはずで2バイト読む
+        if (read(STDIN_FILENO, &seq[0], 1) != 1) return '\x1b';
+        if (read(STDIN_FILENO, &seq[1], 1) != 1) return '\x1b';
+
+        if (seq[0] == '[') {
+            switch(seq[1]) {
+                case 'A': return 'k'; // up
+                case 'B': return 'j'; // down
+                case 'C': return 'l'; // right
+                case 'D': return 'h'; // left
+            }
+        }
+
+        // TODO: 消す
+        abort();
+        return '\x1b';
+    } else {
+        return c;
+    }
 }
 
 int getCursorPosition(int *rows, int *cols) {
@@ -169,7 +194,24 @@ void abFlush(struct abuf *ab, int writeFd) {
 void editorDrawRows(struct abuf *ab) {
     int y;
     for (y = 0; y < E.screenrows; y++) {
-        abAppend(ab, "~", 1);
+        if (y == E.screenrows / 3) {
+            char welcome[80];
+            int welcomelen = snprintf(welcome, sizeof(welcome),
+                "Kilo editor -- version %s", KILO_VERSION);
+            // welcomeメッセージが横幅を超える場合はtruncate
+            if (welcomelen > E.screencols) welcomelen = E.screencols;
+
+            // welcomeメッセージ左の空白部分を作る
+            int padding = (E.screencols - welcomelen) / 2;
+            if (padding) {
+                abAppend(ab, "~", 1);
+                padding--;
+            }
+            while (padding--) abAppend(ab, " ", 1);
+            abAppend(ab, welcome, welcomelen);
+        } else {
+            abAppend(ab, "~", 1);
+        }
 
         // カーソルの右側を削除 : EL – Erase In Line
         abAppend(ab, "\x1b[K", 3);
@@ -180,6 +222,7 @@ void editorDrawRows(struct abuf *ab) {
     }
 }
 
+// @see: https://vt100.net/docs/vt100-ug/chapter3.html
 void editorRefreshScreen() {
     struct abuf ab = ABUF_INIT;
     // struct abuf ab = { .b = NULL, .len = 0 };
@@ -187,6 +230,7 @@ void editorRefreshScreen() {
     // \xXX で1バイト
     // カーソルを隠す : RM – Reset Mode
     // ESC [ Ps ; Ps ; . . . ; Ps l 	default value: none
+    // 25 = cursor
     abAppend(&ab, "\x1b[?25l", 6);
     // // コンソール全体をクリア : ED – Erase In Display
     // abAppend(&ab, "\x1b[2J", 4);
@@ -195,11 +239,14 @@ void editorRefreshScreen() {
 
     editorDrawRows(&ab);
 
-    // 再度カーソル左上移動
-    abAppend(&ab, "\x1b[H", 3);
+    // カーソル位置を現在の位置に移動
+    char buf[32];
+    snprintf(buf, sizeof(buf), "\x1b[%d;%dH", E.cy + 1, E.cx + 1); // VT100は1から始まる
+    abAppend(&ab, buf, strlen(buf));
+
     // カーソルを表示 : SM – Set Mode
     // ESC [ Ps ; . . . ; Ps h 	default value: none
-    // abAppend(&ab, "\x1b[?25h", 6);
+    abAppend(&ab, "\x1b[?25h", 6);
 
     write(STDOUT_FILENO, ab.b, ab.len);
 
@@ -209,6 +256,23 @@ void editorRefreshScreen() {
 
 /*** input ***/
 
+void editorMoveCursor(char key) {
+    switch (key) {
+    case 'h':
+        E.cx--;
+        break;
+    case 'l':
+        E.cx++;
+        break;
+    case 'k':
+        E.cy--;
+        break;
+    case 'j':
+        E.cy++;
+        break;
+    }
+}
+
 void editorProcessKeypress() {
     char c = editorReadKey();
 
@@ -216,9 +280,17 @@ void editorProcessKeypress() {
     case CTRL_KEY('q'):
         exit(0);
         break;
+
     case CTRL_KEY('\\'):
         errno = ERANGE;
         die("dummy exit");
+        break;
+    
+    case 'h':
+    case 'j':
+    case 'k':
+    case 'l':    
+        editorMoveCursor(c);
         break;
     }
 }
@@ -226,6 +298,9 @@ void editorProcessKeypress() {
 /*** init ***/
 
 void initEditor() {
+    E.cx = 0;
+    E.cy = 0;
+
     if (getWindowSize(&E.screenrows, &E.screencols) == -1) die("getWindowSize");
 }
 
@@ -235,7 +310,9 @@ int main() {
     initEditor();
 
     while (1) {
+        // スクリーンに文字を描画
         editorRefreshScreen();
+        // キーを待ち受け
         editorProcessKeypress();
     }
     return 0;
