@@ -16,7 +16,15 @@
 
 #define KILO_VERSION "0.0.1"
 
+// Ctrl+X を制御文字に変換する 6, 7bitを落とすと変換できる
 #define CTRL_KEY(k) ((k) & 0x1f)
+
+enum editorKey {
+    ARROW_LEFT = 1000,
+    ARROW_RIGHT,
+    ARROW_UP,
+    ARROW_DOWN
+};
 
 /*** my ***/
 void handleSIGUSR1(int unused __attribute__((unused))) {
@@ -77,7 +85,7 @@ void enableRawMode() {
     if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw) == -1) die("tcsetattr");
 }
 
-char editorReadKey() {
+int editorReadKey() {
     int nread;
     char c;
     while ((nread = read(STDIN_FILENO, &c, 1)) != 1) {
@@ -93,16 +101,14 @@ char editorReadKey() {
         if (read(STDIN_FILENO, &seq[1], 1) != 1) return '\x1b';
 
         if (seq[0] == '[') {
-            switch(seq[1]) {
-                case 'A': return 'k'; // up
-                case 'B': return 'j'; // down
-                case 'C': return 'l'; // right
-                case 'D': return 'h'; // left
+            switch (seq[1]) {
+                case 'A': return ARROW_UP; // up
+                case 'B': return ARROW_DOWN; // down
+                case 'C': return ARROW_RIGHT; // right
+                case 'D': return ARROW_LEFT; // left
             }
         }
 
-        // TODO: 消す
-        abort();
         return '\x1b';
     } else {
         return c;
@@ -216,6 +222,7 @@ void editorDrawRows(struct abuf *ab) {
         // カーソルの右側を削除 : EL – Erase In Line
         abAppend(ab, "\x1b[K", 3);
 
+        // 最後の行以外は改行を入れる
         if (y < E.screenrows - 1) {
             abAppend(ab, "\r\n", 2);
         }
@@ -241,6 +248,8 @@ void editorRefreshScreen() {
 
     // カーソル位置を現在の位置に移動
     char buf[32];
+    // TODO: delete
+    fprintf(stderr, "cx: %d, cy: %d\r\n", E.cx, E.cy);
     snprintf(buf, sizeof(buf), "\x1b[%d;%dH", E.cy + 1, E.cx + 1); // VT100は1から始まる
     abAppend(&ab, buf, strlen(buf));
 
@@ -256,25 +265,29 @@ void editorRefreshScreen() {
 
 /*** input ***/
 
-void editorMoveCursor(char key) {
+void editorMoveCursor(int key) {
     switch (key) {
-    case 'h':
-        E.cx--;
+    case ARROW_LEFT:
+        if (E.cx != 0)
+            E.cx--;
         break;
-    case 'l':
-        E.cx++;
+    case ARROW_RIGHT:
+        if (E.cx != E.screencols - 1)
+            E.cx++;
         break;
-    case 'k':
-        E.cy--;
+    case ARROW_UP:
+        if (E.cy != 0)
+            E.cy--;
         break;
-    case 'j':
-        E.cy++;
+    case ARROW_DOWN:
+        if (E.cy != E.screenrows - 1)
+            E.cy++;
         break;
     }
 }
 
 void editorProcessKeypress() {
-    char c = editorReadKey();
+    int c = editorReadKey();
 
     switch (c) {
     case CTRL_KEY('q'):
@@ -286,10 +299,10 @@ void editorProcessKeypress() {
         die("dummy exit");
         break;
     
-    case 'h':
-    case 'j':
-    case 'k':
-    case 'l':    
+    case ARROW_UP:
+    case ARROW_DOWN:
+    case ARROW_LEFT:
+    case ARROW_RIGHT:
         editorMoveCursor(c);
         break;
     }
