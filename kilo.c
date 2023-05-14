@@ -1,11 +1,16 @@
 /*** includes ***/
 
+#define _DEFAULT_SOURCE
+#define _BSD_SOURCE
+#define _GNU_SOURCE
+
 #include <ctype.h>
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/ioctl.h>
+#include <sys/types.h>
 #include <termios.h>
 #include <unistd.h>
 
@@ -36,7 +41,7 @@ void handleSIGUSR1(int unused __attribute__((unused))) {
     ;
 }
 
-void sigpause(const char *msg) {
+void sigpause_dbg(const char *msg) {
     if (msg != NULL)
         printf("Wait SIGUSR1: %s\r\n", msg);
     pause();
@@ -50,10 +55,23 @@ void debug() {
 
 /*** data ***/
 
+typedef struct erow {
+    int size; // NULL文字も改行文字も入らない
+    char *chars; // NULL文字は入るが改行文字は入らない
+} erow;
+
 struct editorConfig {
     int cx, cy;
     int screenrows;
     int screencols;
+    // *row の要素数
+    int numrows;
+    // 構造体の配列で1要素がファイル行に該当する
+    // 配列であるかどうかは型定義だけ見ても判別できない
+    // 判別するためには mallocなどの確保の仕方を見るかアクセスの仕方を見る
+    // 構造体へのポインタ      malloc(sizeof(struct 構造体))   , struct->member
+    // 構造体配列へのポインタ  malloc(sizeof(struct 構造体) * 要素数), struct[0].member
+    erow *row;
     struct termios orig_termios;
 };
 
@@ -194,6 +212,44 @@ int getWindowSize(int *rows, int *cols) {
     }
 }
 
+/*** row operations ***/
+
+void editorAppendRow(char *s, size_t len) {
+    E.row = realloc(E.row, sizeof(erow) * (E.numrows + 1));
+
+    int at = E.numrows;
+    E.row[at].size = len;
+    E.row[at].chars = malloc(len + 1); // 1バイトはnull文字
+    memcpy(E.row[at].chars, s, len);
+    E.row[at].chars[len] = '\0';
+    E.numrows++;
+}
+
+/*** file i/o ***/
+
+void editorOpen(char *filename) {
+    FILE *fp = fopen(filename, "r");
+    if (!fp) die("fopen");
+
+    char *line = NULL;
+    size_t linecap = 0;
+    ssize_t linelen;
+    while ((linelen = getline(&line, &linecap, fp)) != -1) {
+        while (linelen > 0 && (line[linelen - 1] == '\n' ||
+                            line[linelen - 1] == '\r')) {
+            // 改行文字がlinelenに入っているので、改行があった場合に文字数をその分減らす
+            // abc\r\n\0 (linelen = 5) -> linelen = 3になる
+            linelen--;                        
+        }
+        editorAppendRow(line, linelen);
+    }
+    // MEMO: EOFとエラーを区別したいときはferror(3)かfeof(3)を使うらしい
+    if (ferror(fp))
+        die("Unable to read line from file");
+    free(line);
+    fclose(fp);
+}
+
 /*** append buffer ***/
 
 struct abuf {
@@ -230,23 +286,32 @@ void abFlush(struct abuf *ab, int writeFd) {
 void editorDrawRows(struct abuf *ab) {
     int y;
     for (y = 0; y < E.screenrows; y++) {
-        if (y == E.screenrows / 3) {
-            char welcome[80];
-            int welcomelen = snprintf(welcome, sizeof(welcome),
-                "Kilo editor -- version %s", KILO_VERSION);
-            // welcomeメッセージが横幅を超える場合はtruncate
-            if (welcomelen > E.screencols) welcomelen = E.screencols;
+        if (y >= E.numrows) {
+            // ファイル行数以上のターミナル行数があった場合は ~文字を左に出力
+            if (E.numrows == 0 && y == E.screenrows / 3) {
+                // ファイルを読み込まない場合は中心にWelcomeメッセージを表示する
+                char welcome[80];
+                int welcomelen = snprintf(welcome, sizeof(welcome),
+                    "Kilo editor -- version %s", KILO_VERSION);
+                // welcomeメッセージが横幅を超える場合はtruncate
+                if (welcomelen > E.screencols) welcomelen = E.screencols;
 
-            // welcomeメッセージ左の空白部分を作る
-            int padding = (E.screencols - welcomelen) / 2;
-            if (padding) {
+                // welcomeメッセージ左の空白部分を作る
+                int padding = (E.screencols - welcomelen) / 2;
+                if (padding) {
+                    abAppend(ab, "~", 1);
+                    padding--;
+                }
+                while (padding--) abAppend(ab, " ", 1);
+                abAppend(ab, welcome, welcomelen);
+            } else {
                 abAppend(ab, "~", 1);
-                padding--;
             }
-            while (padding--) abAppend(ab, " ", 1);
-            abAppend(ab, welcome, welcomelen);
         } else {
-            abAppend(ab, "~", 1);
+            int len = E.row[y].size;
+            // 行の横幅がスクリーンを超えていたら切り詰める
+            if (len > E.screenrows) len = E.screencols;
+            abAppend(ab, E.row[y].chars, len);
         }
 
         // カーソルの右側を削除 : EL – Erase In Line
@@ -256,6 +321,8 @@ void editorDrawRows(struct abuf *ab) {
         if (y < E.screenrows - 1) {
             abAppend(ab, "\r\n", 2);
         }
+        // TODO: delete
+        abFlush(ab, 1);
     }
 }
 
@@ -268,7 +335,8 @@ void editorRefreshScreen() {
     // カーソルを隠す : RM – Reset Mode
     // ESC [ Ps ; Ps ; . . . ; Ps l 	default value: none
     // 25 = cursor
-    abAppend(&ab, "\x1b[?25l", 6);
+    // TODO: 戻す
+    // abAppend(&ab, "\x1b[?25l", 6);
     // // コンソール全体をクリア : ED – Erase In Display
     // abAppend(&ab, "\x1b[2J", 4);
     // カーソルを左上に移動 : CUP – Cursor Position
@@ -332,6 +400,10 @@ void editorProcessKeypress() {
     case ARROW_LEFT:
     case ARROW_RIGHT:
         editorMoveCursor(c);
+        if (E.numrows > E.cy && E.row[E.cy].size > E.cx) {
+            fprintf(stderr, "%c", E.row[E.cy].chars[E.cx]);
+        }
+
         break;
 
     case HOME_KEY:
@@ -358,14 +430,19 @@ void editorProcessKeypress() {
 void initEditor() {
     E.cx = 0;
     E.cy = 0;
+    E.numrows = 0;
+    E.row = NULL;
 
     if (getWindowSize(&E.screenrows, &E.screencols) == -1) die("getWindowSize");
 }
 
-int main() {
+int main(int argc, char *argv[]) {
     debug();
     enableRawMode();
     initEditor();
+    if (argc >= 2) {
+        editorOpen(argv[1]);
+    }
 
     while (1) {
         // スクリーンに文字を描画
