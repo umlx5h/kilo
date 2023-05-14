@@ -23,7 +23,12 @@ enum editorKey {
     ARROW_LEFT = 1000,
     ARROW_RIGHT,
     ARROW_UP,
-    ARROW_DOWN
+    ARROW_DOWN,
+    DEL_KEY,
+    HOME_KEY,
+    END_KEY,
+    PAGE_UP,
+    PAGE_DOWN
 };
 
 /*** my ***/
@@ -101,11 +106,36 @@ int editorReadKey() {
         if (read(STDIN_FILENO, &seq[1], 1) != 1) return '\x1b';
 
         if (seq[0] == '[') {
+            if (seq[1] >= '0' && seq[1] <= '9') {
+                // 3文字目を読む
+                if (read(STDIN_FILENO, &seq[2], 1) != 1) return '\x1b';
+                if (seq[2] == '~') {
+                    switch(seq[1]) {
+                        case '1': return HOME_KEY;     // ESC[1~ (in case of tmux)
+                        case '3': return DEL_KEY;      // ESC[3~
+                        case '4': return END_KEY;      // ESC[4~ (in case of tmux)
+                        case '5': return PAGE_UP;
+                        case '6': return PAGE_DOWN;
+                        case '7': return HOME_KEY;
+                        case '8': return END_KEY;
+                    }
+                }
+                
+
+            } else {
+                switch (seq[1]) {
+                    case 'A': return ARROW_UP; // up      ESC[A
+                    case 'B': return ARROW_DOWN; // down
+                    case 'C': return ARROW_RIGHT; // right
+                    case 'D': return ARROW_LEFT; // left
+                    case 'H': return HOME_KEY;   // (windows terminal, vscode, tabby)
+                    case 'F': return END_KEY;    // (windows terminal, vscode, tabby)
+                }
+            }
+        } else if (seq[0] == 'O') {
             switch (seq[1]) {
-                case 'A': return ARROW_UP; // up
-                case 'B': return ARROW_DOWN; // down
-                case 'C': return ARROW_RIGHT; // right
-                case 'D': return ARROW_LEFT; // left
+                case 'H': return HOME_KEY; // (? enviornment)
+                case 'F': return END_KEY;  // (? enviornment)
             }
         }
 
@@ -248,8 +278,6 @@ void editorRefreshScreen() {
 
     // カーソル位置を現在の位置に移動
     char buf[32];
-    // TODO: delete
-    fprintf(stderr, "cx: %d, cy: %d\r\n", E.cx, E.cy);
     snprintf(buf, sizeof(buf), "\x1b[%d;%dH", E.cy + 1, E.cx + 1); // VT100は1から始まる
     abAppend(&ab, buf, strlen(buf));
 
@@ -304,6 +332,23 @@ void editorProcessKeypress() {
     case ARROW_LEFT:
     case ARROW_RIGHT:
         editorMoveCursor(c);
+        break;
+
+    case HOME_KEY:
+        E.cx = 0;
+        break;
+
+    case END_KEY:
+        E.cx = E.screencols - 1;
+        break;
+
+    case PAGE_UP:
+    case PAGE_DOWN:
+        {
+            int times = E.screenrows;
+            while (times--)
+                editorMoveCursor(c == PAGE_UP ? ARROW_UP : ARROW_DOWN);
+        }
         break;
     }
 }
