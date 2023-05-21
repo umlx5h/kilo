@@ -56,16 +56,16 @@ void debug() {
 /*** data ***/
 
 typedef struct erow {
-    int size; // NULL文字も改行文字も入らない
-    char *chars; // NULL文字は入るが改行文字は入らない
+    int size;    // 行の文字数 NULL文字も改行文字も入らない
+    char *chars; // 行の文字列 NULL文字は入るが改行文字は入らない
 } erow;
 
 struct editorConfig {
-    int cx, cy;
+    int cx, cy;     // テキストファイルに対してのカーソル位置, cx: 列, cy: 行
+    int rowoff;
     int screenrows;
     int screencols;
-    // *row の要素数
-    int numrows;
+    int numrows;    // ファイルの行数 (*row の要素数)
     // 構造体の配列で1要素がファイル行に該当する
     // 配列であるかどうかは型定義だけ見ても判別できない
     // 判別するためには mallocなどの確保の仕方を見るかアクセスの仕方を見る
@@ -282,11 +282,23 @@ void abFlush(struct abuf *ab, int writeFd) {
 }
 
 /*** output ***/
+void editorScroll() {
+    // スクリーンより上にカーソル移動しようとしているので、オフセット位置を調整(減らす)
+    if (E.cy < E.rowoff) {
+        E.rowoff = E.cy;
+    }
+
+    // スクリーンより下にカーソル移動しようとしているので、オフセット位置を調整(増やす)
+    if (E.cy >= E.rowoff + E.screenrows) {
+        E.rowoff = E.cy - E.screenrows + 1;
+    }
+}
 
 void editorDrawRows(struct abuf *ab) {
     int y;
     for (y = 0; y < E.screenrows; y++) {
-        if (y >= E.numrows) {
+        int filerow = y + E.rowoff;
+        if (filerow >= E.numrows) {
             // ファイル行数以上のターミナル行数があった場合は ~文字を左に出力
             if (E.numrows == 0 && y == E.screenrows / 3) {
                 // ファイルを読み込まない場合は中心にWelcomeメッセージを表示する
@@ -308,10 +320,12 @@ void editorDrawRows(struct abuf *ab) {
                 abAppend(ab, "~", 1);
             }
         } else {
-            int len = E.row[y].size;
+            // ファイル内容をスクリーンに出力
+
+            int len = E.row[filerow].size;
             // 行の横幅がスクリーンを超えていたら切り詰める
             if (len > E.screenrows) len = E.screencols;
-            abAppend(ab, E.row[y].chars, len);
+            abAppend(ab, E.row[filerow].chars, len);
         }
 
         // カーソルの右側を削除 : EL – Erase In Line
@@ -328,6 +342,8 @@ void editorDrawRows(struct abuf *ab) {
 
 // @see: https://vt100.net/docs/vt100-ug/chapter3.html
 void editorRefreshScreen() {
+    editorScroll();
+
     struct abuf ab = ABUF_INIT;
     // struct abuf ab = { .b = NULL, .len = 0 };
     // The \x1b is the ASCII escape character (hexadecimal value 0x1b = ESC) 
@@ -346,7 +362,7 @@ void editorRefreshScreen() {
 
     // カーソル位置を現在の位置に移動
     char buf[32];
-    snprintf(buf, sizeof(buf), "\x1b[%d;%dH", E.cy + 1, E.cx + 1); // VT100は1から始まる
+    snprintf(buf, sizeof(buf), "\x1b[%d;%dH", (E.cy - E.rowoff) + 1, E.cx + 1); // VT100は1から始まる
     abAppend(&ab, buf, strlen(buf));
 
     // カーソルを表示 : SM – Set Mode
@@ -376,7 +392,8 @@ void editorMoveCursor(int key) {
             E.cy--;
         break;
     case ARROW_DOWN:
-        if (E.cy != E.screenrows - 1)
+        // ファイルの末尾までスクロールを許可
+        if (E.cy != E.numrows)
             E.cy++;
         break;
     }
@@ -400,10 +417,6 @@ void editorProcessKeypress() {
     case ARROW_LEFT:
     case ARROW_RIGHT:
         editorMoveCursor(c);
-        if (E.numrows > E.cy && E.row[E.cy].size > E.cx) {
-            fprintf(stderr, "%c", E.row[E.cy].chars[E.cx]);
-        }
-
         break;
 
     case HOME_KEY:
@@ -430,10 +443,16 @@ void editorProcessKeypress() {
 void initEditor() {
     E.cx = 0;
     E.cy = 0;
+    E.rowoff = 0;
     E.numrows = 0;
     E.row = NULL;
 
     if (getWindowSize(&E.screenrows, &E.screencols) == -1) die("getWindowSize");
+}
+
+void debugScreen() {
+    fprintf(stderr, "cx: %d, cy: %d, rowoff: %d, srows: %d, frows: %d\n",
+        E.cx, E.cy, E.rowoff, E.screenrows, E.numrows);
 }
 
 int main(int argc, char *argv[]) {
@@ -447,6 +466,7 @@ int main(int argc, char *argv[]) {
     while (1) {
         // スクリーンに文字を描画
         editorRefreshScreen();
+        debugScreen();
         // キーを待ち受け
         editorProcessKeypress();
     }
