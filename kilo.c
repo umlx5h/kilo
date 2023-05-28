@@ -20,6 +20,7 @@
 /*** defines ***/
 
 #define KILO_VERSION "0.0.1"
+#define KILO_TAB_STOP 8
 
 // Ctrl+X を制御文字に変換する 6, 7bitを落とすと変換できる
 #define CTRL_KEY(k) ((k) & 0x1f)
@@ -57,11 +58,14 @@ void debug() {
 
 typedef struct erow {
     int size;    // 行の文字数 NULL文字も改行文字も入らない
+    int rsize;
     char *chars; // 行の文字列 NULL文字は入るが改行文字は入らない
+    char *render;
 } erow;
 
 struct editorConfig {
     int cx, cy;     // テキストファイルに対してのカーソル位置, cx: 列, cy: 行
+    int rx;         // 画面描画上のファイルに対してのカーソル位置
     int rowoff;     // テキストファイルの先頭行から何行スキップするか 垂直方向のスクロールで使用
     int coloff;
     int screenrows;
@@ -215,6 +219,41 @@ int getWindowSize(int *rows, int *cols) {
 
 /*** row operations ***/
 
+int editorRowCxToRx(erow *row, int cx) {
+    int rx = 0;
+    int j;
+    for (j = 0; j < cx; j++) {
+        if (row->chars[j] == '\t')
+            rx += (KILO_TAB_STOP - 1) - (rx % KILO_TAB_STOP);
+        rx++;
+    }
+    return rx;
+}
+
+
+void editorUpdateRow(erow *row) {
+    int tabs = 0;
+    int j;
+    for (j = 0; j < row->size; j++)
+        if (row->chars[j] == '\t') tabs++;
+
+    free(row->render);
+    row->render = malloc(row->size + tabs*(KILO_TAB_STOP - 1) + 1); // タブ文字を考えて最大限の文字数を確保する
+
+    int idx = 0;
+    for (j = 0; j < row->size; j++) {
+        // TAB文字をスペース8つに変換
+        if (row->chars[j] == '\t') {
+            row->render[idx++] = ' ';
+            while (idx % KILO_TAB_STOP != 0) row->render[idx++] = ' ';
+        } else {
+            row->render[idx++] = row->chars[j];
+        }
+    }
+    row->render[idx] = '\0';
+    row->rsize = idx; // タブの文字数とかの分がsizeより増えることになる
+}
+
 void editorAppendRow(char *s, size_t len) {
     E.row = realloc(E.row, sizeof(erow) * (E.numrows + 1));
 
@@ -223,6 +262,11 @@ void editorAppendRow(char *s, size_t len) {
     E.row[at].chars = malloc(len + 1); // 1バイトはnull文字
     memcpy(E.row[at].chars, s, len);
     E.row[at].chars[len] = '\0';
+
+    E.row[at].rsize = 0;
+    E.row[at].render = NULL;
+    editorUpdateRow(&E.row[at]);
+
     E.numrows++;
 }
 
@@ -284,6 +328,11 @@ void abFlush(struct abuf *ab, int writeFd) {
 
 /*** output ***/
 void editorScroll() {
+    E.rx = 0;
+    if (E.cy < E.numrows) {
+        E.rx = editorRowCxToRx(&E.row[E.cy], E.cx); // タブ文字などを考慮したカーソル位置をcxから作る
+    }
+
     /* # 垂直スクロール */
     // スクリーンより上にカーソル移動しようとしているので、オフセット位置を調整(減らす)
     if (E.cy < E.rowoff) {
@@ -297,13 +346,13 @@ void editorScroll() {
 
     /* # 水平スクロール */
     // スクリーンより左にカーソル移動しようとしているので、オフセット位置を調整(減らす)
-    if (E.cx < E.coloff) {
-        E.coloff = E.cx;
+    if (E.rx < E.coloff) {
+        E.coloff = E.rx;
     }
 
     // スクリーンより右にカーソル移動しようとしているので、オフセット位置を調整(増やす)
-    if (E.cx >= E.coloff + E.screencols) {
-        E.coloff = E.cx - E.screencols + 1;
+    if (E.rx >= E.coloff + E.screencols) {
+        E.coloff = E.rx - E.screencols + 1;
     }
 }
 
@@ -334,11 +383,11 @@ void editorDrawRows(struct abuf *ab) {
             }
         } else {
             // ファイル内容をスクリーンに出力
-            int len = E.row[filerow].size - E.coloff; // 水平スクロールのため調整
+            int len = E.row[filerow].rsize - E.coloff; // 水平スクロールのため調整
             if (len < 0) len = 0;
             // 行の横幅がスクリーンを超えていたら切り詰める
             if (len > E.screencols) len = E.screencols;
-            abAppend(ab, &E.row[filerow].chars[E.coloff], len); // 水平スクロールのためcoloff文ずらして表示
+            abAppend(ab, &E.row[filerow].render[E.coloff], len); // 水平スクロールのためcoloff文ずらして表示
         }
 
         // カーソルの右側を削除 : EL – Erase In Line
@@ -376,7 +425,7 @@ void editorRefreshScreen() {
     // カーソル位置を現在の位置に移動
     char buf[32];
     snprintf(buf, sizeof(buf), "\x1b[%d;%dH", (E.cy - E.rowoff) + 1, 
-                                              (E.cx - E.coloff) + 1); // VT100は1から始まる
+                                              (E.rx - E.coloff) + 1); // VT100は1から始まる
     abAppend(&ab, buf, strlen(buf));
 
     // カーソルを表示 : SM – Set Mode
@@ -475,6 +524,7 @@ void editorProcessKeypress() {
 void initEditor() {
     E.cx = 0;
     E.cy = 0;
+    E.rx = 0;
     E.rowoff = 0;
     E.coloff = 0;
     E.numrows = 0;
