@@ -62,7 +62,8 @@ typedef struct erow {
 
 struct editorConfig {
     int cx, cy;     // テキストファイルに対してのカーソル位置, cx: 列, cy: 行
-    int rowoff;
+    int rowoff;     // テキストファイルの先頭行から何行スキップするか 垂直方向のスクロールで使用
+    int coloff;
     int screenrows;
     int screencols;
     int numrows;    // ファイルの行数 (*row の要素数)
@@ -283,6 +284,7 @@ void abFlush(struct abuf *ab, int writeFd) {
 
 /*** output ***/
 void editorScroll() {
+    /* # 垂直スクロール */
     // スクリーンより上にカーソル移動しようとしているので、オフセット位置を調整(減らす)
     if (E.cy < E.rowoff) {
         E.rowoff = E.cy;
@@ -291,6 +293,17 @@ void editorScroll() {
     // スクリーンより下にカーソル移動しようとしているので、オフセット位置を調整(増やす)
     if (E.cy >= E.rowoff + E.screenrows) {
         E.rowoff = E.cy - E.screenrows + 1;
+    }
+
+    /* # 水平スクロール */
+    // スクリーンより左にカーソル移動しようとしているので、オフセット位置を調整(減らす)
+    if (E.cx < E.coloff) {
+        E.coloff = E.cx;
+    }
+
+    // スクリーンより右にカーソル移動しようとしているので、オフセット位置を調整(増やす)
+    if (E.cx >= E.coloff + E.screencols) {
+        E.coloff = E.cx - E.screencols + 1;
     }
 }
 
@@ -321,11 +334,11 @@ void editorDrawRows(struct abuf *ab) {
             }
         } else {
             // ファイル内容をスクリーンに出力
-
-            int len = E.row[filerow].size;
+            int len = E.row[filerow].size - E.coloff; // 水平スクロールのため調整
+            if (len < 0) len = 0;
             // 行の横幅がスクリーンを超えていたら切り詰める
             if (len > E.screenrows) len = E.screencols;
-            abAppend(ab, E.row[filerow].chars, len);
+            abAppend(ab, &E.row[filerow].chars[E.coloff], len); // 水平スクロールのためcoloff文ずらして表示
         }
 
         // カーソルの右側を削除 : EL – Erase In Line
@@ -362,7 +375,8 @@ void editorRefreshScreen() {
 
     // カーソル位置を現在の位置に移動
     char buf[32];
-    snprintf(buf, sizeof(buf), "\x1b[%d;%dH", (E.cy - E.rowoff) + 1, E.cx + 1); // VT100は1から始まる
+    snprintf(buf, sizeof(buf), "\x1b[%d;%dH", (E.cy - E.rowoff) + 1, 
+                                              (E.cx - E.coloff) + 1); // VT100は1から始まる
     abAppend(&ab, buf, strlen(buf));
 
     // カーソルを表示 : SM – Set Mode
@@ -384,8 +398,7 @@ void editorMoveCursor(int key) {
             E.cx--;
         break;
     case ARROW_RIGHT:
-        if (E.cx != E.screencols - 1)
-            E.cx++;
+        E.cx++;
         break;
     case ARROW_UP:
         if (E.cy != 0)
@@ -393,7 +406,7 @@ void editorMoveCursor(int key) {
         break;
     case ARROW_DOWN:
         // ファイルの末尾までスクロールを許可
-        if (E.cy != E.numrows)
+        if (E.cy < E.numrows)
             E.cy++;
         break;
     }
@@ -444,6 +457,7 @@ void initEditor() {
     E.cx = 0;
     E.cy = 0;
     E.rowoff = 0;
+    E.coloff = 0;
     E.numrows = 0;
     E.row = NULL;
 
@@ -451,8 +465,10 @@ void initEditor() {
 }
 
 void debugScreen() {
-    fprintf(stderr, "cx: %d, cy: %d, rowoff: %d, srows: %d, frows: %d\n",
-        E.cx, E.cy, E.rowoff, E.screenrows, E.numrows);
+    // fprintf(stderr, "cx: %d, cy: %d, rowoff: %d, srows: %d, frows: %d\n",
+    //     E.cx, E.cy, E.rowoff, E.screenrows, E.numrows);
+    fprintf(stderr, "cx: %d, cy: %d, coloff: %d, scols: %d\n",
+        E.cx, E.cy, E.coloff, E.screencols);
 }
 
 int main(int argc, char *argv[]) {
