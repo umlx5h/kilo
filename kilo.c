@@ -337,7 +337,7 @@ void editorDrawRows(struct abuf *ab) {
             int len = E.row[filerow].size - E.coloff; // 水平スクロールのため調整
             if (len < 0) len = 0;
             // 行の横幅がスクリーンを超えていたら切り詰める
-            if (len > E.screenrows) len = E.screencols;
+            if (len > E.screencols) len = E.screencols;
             abAppend(ab, &E.row[filerow].chars[E.coloff], len); // 水平スクロールのためcoloff文ずらして表示
         }
 
@@ -392,13 +392,24 @@ void editorRefreshScreen() {
 /*** input ***/
 
 void editorMoveCursor(int key) {
+    // カーソル位置にある行を表す構造体を取得 (末尾の場合はNULL)
+    erow *row = (E.cy >= E.numrows) ? NULL : &E.row[E.cy];
     switch (key) {
     case ARROW_LEFT:
-        if (E.cx != 0)
+        if (E.cx != 0) {
             E.cx--;
+        } else if (E.cy > 0) { // カーソルが行頭かつ先頭行以外の場合は前の行の末尾に移動
+            E.cy--;
+            E.cx = E.row[E.cy].size;
+        }
         break;
     case ARROW_RIGHT:
-        E.cx++;
+        if (row && E.cx < row->size) {
+            E.cx++;
+        } else if (row && E.cx ==  row->size) { // カーソルが末尾の場合は右で次の行の先頭に移動
+            E.cy++;
+            E.cx = 0;
+        }
         break;
     case ARROW_UP:
         if (E.cy != 0)
@@ -409,6 +420,14 @@ void editorMoveCursor(int key) {
         if (E.cy < E.numrows)
             E.cy++;
         break;
+    }
+
+
+    // 長い行から上下にスクロールされた時にカーソル位置が行のサイズを超えることがあるので、その場合に行の末尾に補正する
+    row = (E.cy >= E.numrows) ? NULL : &E.row[E.cy];
+    int rowlen = row ? row->size : 0; // ファイル末尾の場合一番左にカーソルを強制的に移動
+    if (E.cx > rowlen) {
+        E.cx = rowlen;
     }
 }
 
