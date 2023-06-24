@@ -566,7 +566,7 @@ void editorDrawRows(struct abuf *ab) {
         // 最後の行以外は改行を入れる
         abAppend(ab, "\r\n", 2);
         // TODO: delete
-        abFlush(ab, 1);
+        // abFlush(ab, 1);
     }
 }
 
@@ -624,7 +624,7 @@ void editorRefreshScreen() {
     // ESC [ Ps ; Ps ; . . . ; Ps l 	default value: none
     // 25 = cursor
     // TODO: 戻す
-    // abAppend(&ab, "\x1b[?25l", 6);
+    abAppend(&ab, "\x1b[?25l", 6);
     // // コンソール全体をクリア : ED – Erase In Display
     // abAppend(&ab, "\x1b[2J", 4);
     // カーソルを左上に移動 : CUP – Cursor Position
@@ -761,12 +761,6 @@ void editorProcessKeypress() {
         editorSave();
         break;
 
-    // TODO: delete it
-    case CTRL_KEY('\\'):
-        errno = ERANGE;
-        die("dummy exit");
-        break;
-    
     case ARROW_UP:
     case ARROW_DOWN:
     case ARROW_LEFT:
@@ -789,7 +783,6 @@ void editorProcessKeypress() {
     case CTRL_KEY('d'):
         if (c == DEL_KEY || c == CTRL_KEY('d')) editorMoveCursor(ARROW_RIGHT);
         editorDelChar();
-        /* TODO */
         break;
 
     case PAGE_UP:
@@ -859,7 +852,7 @@ int main(int argc, char *argv[]) {
     while (1) {
         // スクリーンに文字を描画
         editorRefreshScreen();
-        debugScreen();
+        // debugScreen();
         // キーを待ち受け
         editorProcessKeypress();
     }
