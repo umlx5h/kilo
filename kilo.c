@@ -6,6 +6,7 @@
 
 #include <ctype.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <stdio.h>
 #include <stdarg.h>
 #include <stdlib.h>
@@ -88,6 +89,9 @@ struct editorConfig {
 };
 
 struct editorConfig E;
+
+/*** prototypes ***/
+void editorSetStatusMessage(const char *fmt, ...);
 
 /*** terminal ***/
 
@@ -302,6 +306,27 @@ void editorInsertChar(int c) {
 
 /*** file i/o ***/
 
+// 構造体に保存している*rowから1つの大きな文字列を作って返す
+char *editorRowsToString(int *buflen) {
+    int totlen = 0;
+    int j;
+    for (j = 0; j < E.numrows; j++)
+        totlen += E.row[j].size + 1; // 改行文字
+    *buflen = totlen;
+
+    char *buf = malloc(totlen);
+    char *p = buf;
+    for (j = 0; j < E.numrows; j++) {
+        memcpy(p, E.row[j].chars, E.row[j].size);
+        p += E.row[j].size;
+        // 改行を挿入
+        *p = '\n';
+        p++;
+    }
+
+    return buf;
+}
+
 void editorOpen(char *filename) {
     // これ必要か？
     free(E.filename);
@@ -326,6 +351,29 @@ void editorOpen(char *filename) {
         die("Unable to read line from file");
     free(line);
     fclose(fp);
+}
+
+void editorSave() {
+    if (E.filename == NULL)
+        return;
+
+    int len;
+    char *buf = editorRowsToString(&len);
+
+    int fd = open(E.filename, O_RDWR | O_CREAT, 0644);
+    if (fd != -1) {
+        if (ftruncate(fd, len) != -1) {
+            if (write(fd, buf, len) == len) {
+                close(fd);
+                free(buf);
+                editorSetStatusMessage("%d bytes written to disk", len);
+                return;
+            }
+        }
+        close(fd);
+    }
+    free(buf);
+    editorSetStatusMessage("Can't save! I/O error: %s", strerror(errno));
 }
 
 /*** append buffer ***/
@@ -470,7 +518,7 @@ void editorDrawMessageBar(struct abuf *ab) {
     int msglen = strlen(E.statusmsg);
     if (msglen > E.screencols)
         msglen = E.screencols;
-    if (msglen && time(NULL) - E.statusmsg_time < 5)
+    if (msglen && time(NULL) - E.statusmsg_time < 5) // msgが入ってから5秒未満しか経過してないなら描画する
         abAppend(ab, E.statusmsg, msglen);
 }
 
@@ -572,7 +620,12 @@ void editorProcessKeypress() {
     case CTRL_KEY('q'):
         exit(0);
         break;
+    
+    case CTRL_KEY('s'):
+        editorSave();
+        break;
 
+    // TODO: delete it
     case CTRL_KEY('\\'):
         errno = ERANGE;
         die("dummy exit");
@@ -659,7 +712,7 @@ int main(int argc, char *argv[]) {
         editorOpen(argv[1]);
     }
 
-    editorSetStatusMessage("HELP: Ctrl-q = quit");
+    editorSetStatusMessage("HELP: Ctrl-S = save | Ctrl-Q = quit");
 
     while (1) {
         // スクリーンに文字を描画
