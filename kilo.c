@@ -267,10 +267,14 @@ void editorUpdateRow(erow *row) {
     row->rsize = idx; // タブの文字数とかの分がsizeより増えることになる
 }
 
-void editorAppendRow(char *s, size_t len) {
-    E.row = realloc(E.row, sizeof(erow) * (E.numrows + 1));
+void editorInsertRow(int at, char *s, size_t len) {
+    if (at < 0 || at > E.numrows)
+        return;
 
-    int at = E.numrows;
+    // 行をappendする
+    E.row = realloc(E.row, sizeof(erow) * (E.numrows + 1));
+    memmove(&E.row[at + 1], &E.row[at], sizeof(erow) * (E.numrows - at));
+
     E.row[at].size = len;
     E.row[at].chars = malloc(len + 1); // 1バイトはnull文字
     memcpy(E.row[at].chars, s, len);
@@ -334,10 +338,29 @@ void editorRowDelChar(erow *row, int at) {
 void editorInsertChar(int c) {
     if (E.cy == E.numrows) {
         // 最後の行の場合は空白を挿入
-        editorAppendRow("", 0);
+        editorInsertRow(E.numrows, "", 0);
     }
     editorRowInsertChar(&E.row[E.cy], E.cx, c);
     E.cx++;
+}
+
+void editorInsertNewLine() {
+    if (E.cx == 0) {
+        // 行頭の場合空行をinsert
+        editorInsertRow(E.cy, "", 0);
+    } else {
+        erow *row = &E.row[E.cy];
+        // 現在のカーソル位置から右側を取り出し下の行に挿入する
+        editorInsertRow(E.cy + 1, &row->chars[E.cx], row->size - E.cx);
+
+        // カーソル位置の行を切り詰める
+        row = &E.row[E.cy]; // reallocでアドレスが変わっている可能性があるので再代入
+        row->size = E.cx;
+        row->chars[row->size] = '\0';
+        editorUpdateRow(row);
+    }
+    E.cy++;
+    E.cx = 0;
 }
 
 void editorDelChar() {
@@ -400,7 +423,7 @@ void editorOpen(char *filename) {
             // abc\r\n\0 (linelen = 5) -> linelen = 3になる
             linelen--;                        
         }
-        editorAppendRow(line, linelen);
+        editorInsertRow(E.numrows, line, linelen);
     }
     // MEMO: EOFとエラーを区別したいときはferror(3)かfeof(3)を使うらしい
     if (ferror(fp))
@@ -677,7 +700,7 @@ void editorProcessKeypress() {
 
     switch (c) {
     case '\r': // Enter
-        /* TODO */
+        editorInsertNewLine();
         break;
     case CTRL_KEY('q'):
         if (E.dirty && quit_times > 0) {
