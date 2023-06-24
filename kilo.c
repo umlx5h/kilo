@@ -28,6 +28,8 @@
 #define CTRL_KEY(k) ((k) & 0x1f)
 
 enum editorKey {
+    BACKSPACE = 127,
+    // ここから番号は適当に割り当て
     ARROW_LEFT = 1000,
     ARROW_RIGHT,
     ARROW_UP,
@@ -59,8 +61,8 @@ void debug() {
 /*** data ***/
 
 typedef struct erow {
-    int size;    // 行の文字数 NULL文字も改行文字も入らない
-    int rsize;   // タブなど特殊文字を含めた文字数
+    int size;    // 行の文字数 NULL文字も改行文字も入らない charsのサイズ
+    int rsize;   // タブなど特殊文字を含めた文字数 renderのサイズ
     char *chars; // 行の文字列 NULL文字は入るが改行文字は入らない
     char *render;
 } erow;
@@ -273,6 +275,29 @@ void editorAppendRow(char *s, size_t len) {
     editorUpdateRow(&E.row[at]);
 
     E.numrows++;
+}
+
+// ここの *rowは配列ではなく構造体へのポインタ
+void editorRowInsertChar(erow *row, int at, int c) {
+    if (at < 0 || at > row->size)
+        at = row->size;
+    // memmoveを使って文字列に文字を挿入する、memcpyだとoverlapしているので問題になるのでmemmoveを使う
+    row->chars = realloc(row->chars, row->size + 2); // 1文字+NULLバイト
+    memmove(&row->chars[at + 1], &row->chars[at], row->size - at + 1);
+    row->size++;
+    row->chars[at] = c;
+    editorUpdateRow(row);
+}
+
+/*** editor operations ***/
+
+void editorInsertChar(int c) {
+    if (E.cy == E.numrows) {
+        // 最後の行の場合は空白を挿入
+        editorAppendRow("", 0);
+    }
+    editorRowInsertChar(&E.row[E.cy], E.cx, c);
+    E.cx++;
 }
 
 /*** file i/o ***/
@@ -541,6 +566,9 @@ void editorProcessKeypress() {
     int c = editorReadKey();
 
     switch (c) {
+    case '\r': // Enter
+        /* TODO */
+        break;
     case CTRL_KEY('q'):
         exit(0);
         break;
@@ -566,6 +594,12 @@ void editorProcessKeypress() {
             E.cx = E.row[E.cy].size;
         break;
 
+    case BACKSPACE:
+    case CTRL_KEY('h'):
+    case DEL_KEY:
+        /* TODO */
+        break;
+
     case PAGE_UP:
     case PAGE_DOWN:
         {
@@ -580,6 +614,14 @@ void editorProcessKeypress() {
             while (times--)
                 editorMoveCursor(c == PAGE_UP ? ARROW_UP : ARROW_DOWN);
         }
+        break;
+    
+    case CTRL_KEY('l'):
+    case '\x1b':
+        break;
+    
+    default:
+        editorInsertChar(c);
         break;
     }
 }
