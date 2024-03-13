@@ -103,7 +103,7 @@ void die(const char *s) {
     // エラー出す時にターミナル上の表示を消してカーソルを左上に移動してから出力する
     write(STDOUT_FILENO, "\x1b[2J", 4);
     write(STDOUT_FILENO, "\x1b[H", 3);
-    
+
     perror(s);
     exit(1);
 }
@@ -158,7 +158,7 @@ int editorReadKey() {
                         case '8': return END_KEY;
                     }
                 }
-                
+
 
             } else {
                 switch (seq[1]) {
@@ -370,7 +370,7 @@ void editorDelChar() {
         return;
     if (E.cx == 0 && E.cy == 0) // 一番上の場合は上の行がないのでスキップ
         return;
-    
+
     erow *row = &E.row[E.cy];
     if (E.cx > 0) {
         // カーソル位置の左の文字を消すので-1している
@@ -423,7 +423,7 @@ void editorOpen(char *filename) {
                             line[linelen - 1] == '\r')) {
             // 改行文字がlinelenに入っているので、改行があった場合に文字数をその分減らす
             // abc\r\n\0 (linelen = 5) -> linelen = 3になる
-            linelen--;                        
+            linelen--;
         }
         editorInsertRow(E.numrows, line, linelen);
     }
@@ -580,7 +580,7 @@ void editorDrawStatusBar(struct abuf *ab) {
     int len = snprintf(status, sizeof(status), "%.20s - %d lines %s",
         E.filename ? E.filename : "[No Name]", E.numrows,
         E.dirty ? "(modified)" : "");
-    
+
     int rlen = snprintf(rstatus, sizeof(rstatus), "%d/%d",
         E.cy + 1, E.numrows);
     if (len > E.screencols)
@@ -618,7 +618,7 @@ void editorRefreshScreen() {
 
     struct abuf ab = ABUF_INIT;
     // struct abuf ab = { .b = NULL, .len = 0 };
-    // The \x1b is the ASCII escape character (hexadecimal value 0x1b = ESC) 
+    // The \x1b is the ASCII escape character (hexadecimal value 0x1b = ESC)
     // \xXX で1バイト
     // カーソルを隠す : RM – Reset Mode
     // ESC [ Ps ; Ps ; . . . ; Ps l 	default value: none
@@ -636,7 +636,7 @@ void editorRefreshScreen() {
 
     // カーソル位置を現在の位置に移動
     char buf[32];
-    snprintf(buf, sizeof(buf), "\x1b[%d;%dH", (E.cy - E.rowoff) + 1, 
+    snprintf(buf, sizeof(buf), "\x1b[%d;%dH", (E.cy - E.rowoff) + 1,
                                               (E.rx - E.coloff) + 1); // VT100は1から始まる
     abAppend(&ab, buf, strlen(buf));
 
@@ -703,6 +703,7 @@ void editorMoveCursor(int key) {
     erow *row = (E.cy >= E.numrows) ? NULL : &E.row[E.cy];
     switch (key) {
     case ARROW_LEFT:
+    case CTRL_KEY('b'):
         if (E.cx != 0) {
             E.cx--;
         } else if (E.cy > 0) { // カーソルが行頭かつ先頭行以外の場合は前の行の末尾に移動
@@ -711,6 +712,7 @@ void editorMoveCursor(int key) {
         }
         break;
     case ARROW_RIGHT:
+    case CTRL_KEY('f'):
         if (row && E.cx < row->size) {
             E.cx++;
         } else if (row && E.cx ==  row->size) { // カーソルが末尾の場合は右で次の行の先頭に移動
@@ -719,10 +721,12 @@ void editorMoveCursor(int key) {
         }
         break;
     case ARROW_UP:
+    case CTRL_KEY('p'):
         if (E.cy != 0)
             E.cy--;
         break;
     case ARROW_DOWN:
+    case CTRL_KEY('n'):
         // ファイルの末尾までスクロールを許可
         if (E.cy < E.numrows)
             E.cy++;
@@ -756,23 +760,29 @@ void editorProcessKeypress() {
         }
         exit(0);
         break;
-    
+
     case CTRL_KEY('s'):
         editorSave();
         break;
 
     case ARROW_UP:
+    case CTRL_KEY('p'):
     case ARROW_DOWN:
+    case CTRL_KEY('n'):
     case ARROW_LEFT:
+    case CTRL_KEY('b'):
     case ARROW_RIGHT:
+    case CTRL_KEY('f'):
         editorMoveCursor(c);
         break;
 
     case HOME_KEY:
+    case CTRL_KEY('a'):
         E.cx = 0;
         break;
 
     case END_KEY:
+    case CTRL_KEY('e'):
         if (E.cy < E.numrows)
             E.cx = E.row[E.cy].size;
         break;
@@ -794,17 +804,17 @@ void editorProcessKeypress() {
                 E.cy = E.rowoff + E.screenrows - 1;
                 if (E.cy > E.numrows) E.cy = E.numrows;
             }
-            
+
             int times = E.screenrows;
             while (times--)
                 editorMoveCursor(c == PAGE_UP ? ARROW_UP : ARROW_DOWN);
         }
         break;
-    
+
     case CTRL_KEY('l'):
     case '\x1b':
         break;
-    
+
     default:
         editorInsertChar(c);
         break;
@@ -858,3 +868,5 @@ int main(int argc, char *argv[]) {
     }
     return 0;
 }
+
+// vim:norelativenumber:
