@@ -483,16 +483,42 @@ void editorSave() {
 /** find ***/
 
 void editorFindCallback(char *query, int key) {
+    static int last_match = -1; // the index of the row that the last match was on
+    static int direction = 1; // 1: forward, -1: backward
+
     if (key == '\r' || key == '\x1b') {
+        // reset state
+        last_match = -1;
+        direction = 1;
         return;
+    } else if (key == ARROW_RIGHT || key == ARROW_DOWN) {
+        // search forward
+        direction = 1;
+    } else if (key == ARROW_LEFT || key == ARROW_UP) {
+        // search backward
+        direction = -1;
+    } else {
+        // 検索ワードが変化した場合は前方検索に戻しつつstateをreset
+        last_match = -1;
+        direction = 1;
     }
 
+    if (last_match == -1) direction = 1;
+    int current = last_match;
     int i;
     for (i = 0; i < E.numrows; i++) {
-        erow *row = &E.row[i];
+        current += direction;
+
+        // search wrap
+        if (current == -1) current = E.numrows - 1; // 一番上にいったので一番下に移動
+        else if (current == E.numrows) current = 0; // 一番下にいったので一番上に移動
+
+        erow *row = &E.row[current];
         char *match = strstr(row->render, query);
         if (match) {
-            E.cy = i;
+            last_match = current;
+            E.cy = current;
+            // E.cy = i;
             E.cx = editorRowRxToCx(row, match - row->render);
             // 検索結果が画面の一番上になるように設定する
             E.rowoff = E.numrows;
@@ -507,7 +533,7 @@ void editorFind() {
     int saved_coloff = E.coloff;
     int saved_rowoff = E.rowoff;
 
-    char *query = editorPrompt("Search: %s (ESC to cancel)", editorFindCallback);
+    char *query = editorPrompt("Search: %s (Use ESC/Arrows/Enter)", editorFindCallback);
 
     if (query) {
         free(query);
