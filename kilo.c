@@ -42,6 +42,11 @@ enum editorKey {
     PAGE_DOWN
 };
 
+enum editorHighlight {
+    HL_NORMAL = 0,
+    HL_NUMBER
+};
+
 /*** my ***/
 void handleSIGUSR1(int unused __attribute__((unused))) {
     ;
@@ -63,9 +68,15 @@ void debug() {
 
 typedef struct erow {
     int size;    // 行の文字数 NULL文字も改行文字も入らない charsのサイズ
-    int rsize;   // タブなど特殊文字を含めた文字数 renderのサイズ
+    int rsize;   // タブなど特殊文字を含めた文字数 renderとhlのサイズ
     char *chars; // 行の文字列 NULL文字は入るが改行文字は入らない
     char *render;
+
+    // hl is an array of unsigned char values, meaning integers in the range of
+    // 0 to 255. Each value in the array will correspond to a character in
+    // render, and will tell you whether that character is part of a string, or
+    // a comment, or a number, and so on.
+    unsigned char *hl; // highlight
 } erow;
 
 struct editorConfig {
@@ -232,6 +243,29 @@ int getWindowSize(int *rows, int *cols) {
     }
 }
 
+/*** syntax highlighting ***/
+
+void editorUpdateSyntax(erow *row) {
+    row->hl = realloc(row->hl, row->rsize);
+    memset(row->hl, HL_NORMAL, row->rsize);
+
+    int i;
+    for (i = 0; i < row->rsize; i++) {
+        if (isdigit(row->render[i])) {
+            row->hl[i] = HL_NUMBER;
+        }
+    }
+}
+
+// row->hlをANSI colorに変換する
+// ref: https://en.wikipedia.org/wiki/ANSI_escape_code#SGR_(Select_Graphic_Rendition)_parameters
+int editorSyntaxToColor(int hl) {
+    switch (hl) {
+        case HL_NUMBER: return 31; // red
+        default: return 37; // white
+    }
+}
+
 /*** row operations ***/
 
 int editorRowCxToRx(erow *row, int cx) {
@@ -281,6 +315,9 @@ void editorUpdateRow(erow *row) {
     }
     row->render[idx] = '\0';
     row->rsize = idx; // タブの文字数とかの分がsizeより増えることになる
+
+    // syntax highlight (色づけ)のためのデータを更新する
+    editorUpdateSyntax(row);
 }
 
 void editorInsertRow(int at, char *s, size_t len) {
@@ -298,6 +335,7 @@ void editorInsertRow(int at, char *s, size_t len) {
 
     E.row[at].rsize = 0;
     E.row[at].render = NULL;
+    E.row[at].hl = NULL;
     editorUpdateRow(&E.row[at]);
 
     E.numrows++;
@@ -307,6 +345,7 @@ void editorInsertRow(int at, char *s, size_t len) {
 void editorFreeRow(erow *row) {
     free(row->render);
     free(row->chars);
+    free(row->hl);
 }
 
 void editorDelRow(int at) {
@@ -649,19 +688,33 @@ void editorDrawRows(struct abuf *ab) {
             if (len > E.screencols) len = E.screencols;
 
             char *c = &E.row[filerow].render[E.coloff]; // 水平スクロールのためcoloff文ずらして表示
+            unsigned char *hl = &E.row[filerow].hl[E.coloff];
+            int current_color = -1; // 現在の色のステート -1は色未設定
             int j;
             for (j = 0; j < len; j++) {
-                if (isdigit(c[j])) {
+                if (hl[j] == HL_NORMAL) {
+                    if (current_color != -1) {
+                        // 色が設定されていたらreset
+                        abAppend(ab, "\x1b[39m", 5); // reset to normal color: ESC[39m
+                        current_color = -1;
+                    }
+                    abAppend(ab, &c[j], 1);
+                } else {
                     // ANSIエスケープシーケンスでテキストに色を付ける
                     // ref: https://en.wikipedia.org/wiki/ANSI_escape_code#SGR_(Select_Graphic_Rendition)_parameters
-                    abAppend(ab, "\x1b[31m", 5); // 8color 1-7まで 1 = red
-                    // abAppendStr(ab, "\x1b[38;5;219m"); // 256colorは ESC[38;5;Nm で Nのところに0-255の数値を入れる
-                    abAppend(ab, &c[j], 1);
-                    abAppend(ab, "\x1b[39m", 5); // reset to normal color
-                } else {
+                    int color = editorSyntaxToColor(hl[j]);
+                    if (color != current_color) {
+                        // 色が違う時だけエスケープシーケンスを送る
+                        current_color = color;
+                        char buf[16];
+                        int clen = snprintf(buf, sizeof(buf), "\x1b[%dm", color); // 8 color: ESC[0-7]m
+                        abAppend(ab, buf, clen);
+                        // abAppendStr(ab, "\x1b[38;5;219m"); // 256colorは ESC[38;5;Nm で Nのところに0-255の数値を入れる
+                    }
                     abAppend(ab, &c[j], 1);
                 }
             }
+            abAppend(ab, "\x1b[39m", 5); // reset color
         }
 
         // カーソルの右側を削除 : EL – Erase In Line
