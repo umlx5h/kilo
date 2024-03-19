@@ -18,7 +18,6 @@
 #include <unistd.h>
 
 #include <signal.h>
-#include <assert.h>
 
 /*** defines ***/
 
@@ -564,6 +563,16 @@ void abAppend(struct abuf *ab, const char *s, int len) {
     ab->len += len;
 }
 
+void abAppendStr(struct abuf *ab, const char *s) {
+    int len;
+    len = strlen(s);
+    char *new = realloc(ab->b, ab->len + len);
+
+    if (new == NULL) return;
+    memcpy(&new[ab->len], s, len);
+    ab->b = new;
+    ab->len += len;
+}
 
 void abFree(struct abuf *ab) {
     free(ab->b);
@@ -638,7 +647,21 @@ void editorDrawRows(struct abuf *ab) {
             if (len < 0) len = 0;
             // 行の横幅がスクリーンを超えていたら切り詰める
             if (len > E.screencols) len = E.screencols;
-            abAppend(ab, &E.row[filerow].render[E.coloff], len); // 水平スクロールのためcoloff文ずらして表示
+
+            char *c = &E.row[filerow].render[E.coloff]; // 水平スクロールのためcoloff文ずらして表示
+            int j;
+            for (j = 0; j < len; j++) {
+                if (isdigit(c[j])) {
+                    // ANSIエスケープシーケンスでテキストに色を付ける
+                    // ref: https://en.wikipedia.org/wiki/ANSI_escape_code#SGR_(Select_Graphic_Rendition)_parameters
+                    abAppend(ab, "\x1b[31m", 5); // 8color 1-7まで 1 = red
+                    // abAppendStr(ab, "\x1b[38;5;219m"); // 256colorは ESC[38;5;Nm で Nのところに0-255の数値を入れる
+                    abAppend(ab, &c[j], 1);
+                    abAppend(ab, "\x1b[39m", 5); // reset to normal color
+                } else {
+                    abAppend(ab, &c[j], 1);
+                }
+            }
         }
 
         // カーソルの右側を削除 : EL – Erase In Line
@@ -694,6 +717,7 @@ void editorDrawMessageBar(struct abuf *ab) {
 }
 
 // @see: https://vt100.net/docs/vt100-ug/chapter3.html
+// https://en.wikipedia.org/wiki/ANSI_escape_code
 void editorRefreshScreen() {
     editorScroll();
 
