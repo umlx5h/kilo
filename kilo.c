@@ -44,7 +44,8 @@ enum editorKey {
 
 enum editorHighlight {
     HL_NORMAL = 0,
-    HL_NUMBER
+    HL_NUMBER,
+    HL_MATCH
 };
 
 /*** my ***/
@@ -262,6 +263,7 @@ void editorUpdateSyntax(erow *row) {
 int editorSyntaxToColor(int hl) {
     switch (hl) {
         case HL_NUMBER: return 31; // red
+        case HL_MATCH: return 34; // blue
         default: return 37; // white
     }
 }
@@ -524,6 +526,17 @@ void editorFindCallback(char *query, int key) {
     static int last_match = -1; // the index of the row that the last match was on
     static int direction = 1; // 1: forward, -1: backward
 
+    // 以前マッチした箇所のマッチ前のハイライト
+    static int saved_hl_line;
+    static char *saved_hl = NULL;
+
+    // 以前マッチしたものが存在すれば、その箇所のハイライトを元のものに復元する
+    if (saved_hl) {
+        memcpy(E.row[saved_hl_line].hl, saved_hl, E.row[saved_hl_line].rsize);
+        free(saved_hl);
+        saved_hl = NULL;
+    }
+
     if (key == '\r' || key == '\x1b') {
         // reset state
         last_match = -1;
@@ -560,6 +573,14 @@ void editorFindCallback(char *query, int key) {
             E.cx = editorRowRxToCx(row, match - row->render);
             // 検索結果が画面の一番上になるように設定する
             E.rowoff = E.numrows;
+
+            // ハイライト書き換える前の状態をstatic変数に保存しておく
+            saved_hl_line = current;
+            saved_hl = malloc(row->rsize);
+            memcpy(saved_hl, row->hl, row->rsize);
+
+            // マッチ箇所に色をつける
+            memset(&row->hl[match - row->render], HL_MATCH, strlen(query));
             break;
         }
     }
@@ -707,7 +728,7 @@ void editorDrawRows(struct abuf *ab) {
                         // 色が違う時だけエスケープシーケンスを送る
                         current_color = color;
                         char buf[16];
-                        int clen = snprintf(buf, sizeof(buf), "\x1b[%dm", color); // 8 color: ESC[0-7]m
+                        int clen = snprintf(buf, sizeof(buf), "\x1b[%dm", color); // 8 color: ESC3[0-7]m
                         abAppend(ab, buf, clen);
                         // abAppendStr(ab, "\x1b[38;5;219m"); // 256colorは ESC[38;5;Nm で Nのところに0-255の数値を入れる
                     }
